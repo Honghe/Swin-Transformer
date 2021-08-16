@@ -21,7 +21,7 @@ from .samplers import SubsetRandomSampler
 
 def build_loader(config):
     config.defrost()
-    dataset_train, config.MODEL.NUM_CLASSES = build_dataset(is_train=True, config=config)
+    dataset_train, num_classes = build_dataset(is_train=True, config=config)
     config.freeze()
     print(f"local rank {config.LOCAL_RANK} / global rank {dist.get_rank()} successfully build train dataset")
     dataset_val, _ = build_dataset(is_train=False, config=config)
@@ -64,7 +64,7 @@ def build_loader(config):
         mixup_fn = Mixup(
             mixup_alpha=config.AUG.MIXUP, cutmix_alpha=config.AUG.CUTMIX, cutmix_minmax=config.AUG.CUTMIX_MINMAX,
             prob=config.AUG.MIXUP_PROB, switch_prob=config.AUG.MIXUP_SWITCH_PROB, mode=config.AUG.MIXUP_MODE,
-            label_smoothing=config.MODEL.LABEL_SMOOTHING, num_classes=config.MODEL.NUM_CLASSES)
+            label_smoothing=config.MODEL.LABEL_SMOOTHING, num_classes=num_classes)
 
     return dataset_train, dataset_val, data_loader_train, data_loader_val, mixup_fn
 
@@ -81,7 +81,7 @@ def build_dataset(is_train, config):
         else:
             root = os.path.join(config.DATA.DATA_PATH, prefix)
             dataset = datasets.ImageFolder(root, transform=transform)
-        nb_classes = 1000
+        nb_classes = 9
     else:
         raise NotImplementedError("We only support ImageNet Now.")
 
