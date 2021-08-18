@@ -365,3 +365,10 @@ if __name__ == '__main__':
     logger.info(config.dump())
 
     main(config)
+
+    # Fine-tune demo
+    # python -m torch.distributed.launch --nproc_per_node 2 --master_port 12345  finetune.py \
+    # --cfg configs/swin_tiny_patch4_window7_224.yaml \
+    # --data-path ../../Data/2D_geometric_shapes --batch-size 32 --amp-opt-level O0 \
+    # --resume ./swin_tiny_patch4_window7_224.pth \
+    # --opts AUG.AUTO_AUGMENT none AUG.REPROB 0.0 AUG.MIXUP 0.0 AUG.CUTMIX 0.0 AUG.MIXUP_PROB 0.0

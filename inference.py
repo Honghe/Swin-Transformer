@@ -7,22 +7,21 @@
 # For CPU inference only
 
 import argparse
-
-from PIL import Image
-from torch._C import dtype
-from models.build import build_model
 import os
-
-import torch
-import yaml
-from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
-from timm.data.transforms import _pil_interp
-from torchvision import transforms
-from yacs.config import CfgNode as CN
-from torchsummary import summary
-import numpy as np
 import time
 
+import numpy as np
+import torch
+import yaml
+from PIL import Image
+from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+from timm.data.transforms import _pil_interp
+from torchsummary import summary
+from torchvision import transforms
+from yacs.config import CfgNode as CN
+
+from models.build import build_model
+import pandas as pd
 
 _C = CN()
 
@@ -203,7 +202,8 @@ def update_config(config: CN, args):
     _update_config_from_file(config, args.cfg)
 
     config.defrost()
-
+    if args.opts:
+        config.merge_from_list(args.opts)
     if args.resume:
         config.MODEL.RESUME = args.resume
 
@@ -226,6 +226,13 @@ def parse_option():
     parser.add_argument('--cfg', type=str, required=True,
                         metavar="FILE", help='path to config file', )
     parser.add_argument('--resume', help='resume from checkpoint')
+    parser.add_argument(
+        "--opts",
+        help="Modify config options by adding 'KEY VALUE' pairs. ",
+        default=None,
+        nargs='+',
+    )
+    parser.add_argument('--test', help='test data dir')
 
     args, unparsed = parser.parse_known_args()
 
@@ -286,14 +293,26 @@ if __name__ == '__main__':
     image1 = np.random.randn(3, 224, 224)
     image1 = Image.fromarray(image1.transpose(1, 2, 0).astype(np.uint8))
 
-    # real image
-    image2 = Image.open('./figures/teaser.png').convert('RGB')
-
-    for image in [image1, image2]:
-        start = time.time()
+    start = time.time()
+    output = []
+    fnames = sorted(os.listdir(args.test))
+    for i, fname in enumerate(fnames):
+        image = Image.open(os.path.join(args.test, fname)).convert('RGB')
         image = image_processing(image)
+        # Image.fromarray(image.cpu().numpy().transpose(1, 2, 0).astype(np.uint8)).show()
         image = image.unsqueeze(0)
 
         out = inference(config, model, image)
-        print(f'class id {out.argmax()}')
-        print(f'time elapsed {time.time() - start:.2f}s')
+        output.append((out.cpu().numpy()))
+    output = np.vstack(output)
+    df = pd.DataFrame(output, index=fnames)
+    df.insert(0, 'pred', output.argmax(1))
+    pd.options.display.float_format = '{:.2f}'.format
+    print(df)
+    print(f'time elapsed {time.time() - start:.2f}s on {len(fnames)} samples.')
+
+    # inference demo
+    # python inference.py --cfg configs/swin_tiny_patch4_window7_224.yaml \
+    # --resume output/swin_tiny_patch4_window7_224/default/ckpt_epoch_15.pth \
+    # --opts MODEL.NUM_CLASSES 9 TEST.CROP False
+    # --test ../../Data/2D_geometric_shapes/realtest
