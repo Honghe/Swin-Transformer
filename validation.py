@@ -14,6 +14,7 @@ import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
+from sklearn.metrics import confusion_matrix
 from timm.utils import accuracy, AverageMeter
 
 from config import get_config
@@ -22,6 +23,9 @@ from data.samplers import SubsetRandomSampler
 from logger import create_logger
 from models import build_model
 from utils import reduce_tensor
+import seaborn as sn
+import pandas as pd
+from matplotlib import pyplot as plt
 
 try:
     # noinspection PyUnresolvedReferences
@@ -105,7 +109,7 @@ def build_loader(config):
 
 def main(config):
     dataset_val, data_loader_val = build_loader(config)
-
+    classes_val = sorted(os.listdir(os.path.join(config.DATA.DATA_PATH, 'val')))
     logger.info(f"Creating model:{config.MODEL.TYPE}/{config.MODEL.NAME}")
     model = build_model(config)
     model.cuda()
@@ -127,7 +131,7 @@ def main(config):
             flops = model_without_ddp.flops()
             logger.info(f"number of GFLOPs: {flops / 1e9}")
 
-        acc1, acc5, loss = validate(config, data_loader_val, model)
+        acc1, acc5, loss = validate(config, data_loader_val, model, classes_val)
         logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
         if config.EVAL_MODE:
             return
@@ -142,7 +146,7 @@ def main(config):
 
 
 @torch.no_grad()
-def validate(config, data_loader, model):
+def validate(config, data_loader, model, classes):
     criterion = torch.nn.CrossEntropyLoss()
     model.eval()
 
@@ -152,12 +156,18 @@ def validate(config, data_loader, model):
     acc5_meter = AverageMeter()
 
     end = time.time()
+    outputs = []
+    targets = []
+
     for idx, (images, target) in enumerate(data_loader):
         images = images.cuda(non_blocking=True)
         target = target.cuda(non_blocking=True)
 
         # compute output
-        output = model(images)
+        output = model(images)  # (batch, pro)
+
+        outputs.append(output.cpu().numpy().argmax(axis=1))
+        targets.append(target.cpu().numpy())
 
         # measure accuracy and record loss
         loss = criterion(output, target)
@@ -185,6 +195,16 @@ def validate(config, data_loader, model):
                 f'Acc@5 {acc5_meter.val:.3f} ({acc5_meter.avg:.3f})\t'
                 f'Mem {memory_used:.0f}MB')
     logger.info(f' * Acc@1 {acc1_meter.avg:.3f} Acc@5 {acc5_meter.avg:.3f}')
+    targets = [x for target in targets for x in target]
+    outputs = [x for output in outputs for x in output]
+    print(f'targets.len {len(targets)}')
+    confmat = confusion_matrix(targets, outputs)
+    print(confmat)
+    df = pd.DataFrame(confmat, index=classes, columns=classes)
+    fig = plt.figure(figsize=(10, 8))
+    sn.heatmap(df, annot=True, fmt='.3g')
+    plt.tight_layout()
+    plt.savefig(f'acc1_{acc1_meter.avg:.2f}.jpg')
     return acc1_meter.avg, acc5_meter.avg, loss_meter.avg
 
 
@@ -245,7 +265,7 @@ if __name__ == '__main__':
     main(config)
 
     # Validation Demo
-    # python -m torch.distributed.launch --nproc_per_node 2 --master_port 12345  validation.py \
+    # python -m torch.distributed.launch --nproc_per_node 1 --master_port 12345  validation.py \
     # --cfg configs/swin_tiny_patch4_window7_224.yaml \
     # --data-path ./geometric_shape/realdata --batch-size 32 --amp-opt-level O0 \
     # --resume ./output/swin_tiny_patch4_window7_224/default/ckpt_epoch_5.pth \
