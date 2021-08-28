@@ -17,7 +17,7 @@ from timm.data.transforms import _pil_interp
 
 from .cached_image_folder import CachedImageFolder
 from .samplers import SubsetRandomSampler
-
+from PIL import ImageOps
 
 def build_loader(config):
     config.defrost()
@@ -134,6 +134,31 @@ class AddPepperNoise(object):
         else:
             return img
 
+
+class PadSquare(object):
+    """Pad a ``PIL Image`` to sauqre."""
+    def __call__(self, img):
+        """
+        Args:
+            img (PIL Image): Image to be padded.
+        Returns:
+            PIL Image: Padded image.
+        """
+        w, h = img.size
+        desired_size = w if w > h else h
+        old_size = img.size
+        ratio = float(desired_size)/max(old_size)
+        new_size = tuple([int(x*ratio) for x in old_size])
+        delta_w = desired_size - new_size[0]
+        delta_h = desired_size - new_size[1]
+        padding = (delta_w//2, delta_h//2, delta_w-(delta_w//2), delta_h-(delta_h//2))
+        img = ImageOps.expand(img, padding, fill=255)
+        return img
+    
+    def __repr__(self):
+        return self.__class__.__name__ + '()'
+
+
 def build_transform(is_train, config):
     resize_im = config.DATA.IMG_SIZE > 32
     if is_train:
@@ -153,9 +178,11 @@ def build_transform(is_train, config):
             # RandomCrop
             transform.transforms[0] = transforms.RandomCrop(config.DATA.IMG_SIZE, padding=4)
         transform.transforms.insert(0, AddPepperNoise(0.9, 0.8))
+        transform.transforms.insert(0, transforms.RandomRotation((0, 360), expand=True, fill=255))
         return transform
 
     t = []
+    t.append(PadSquare())
     if resize_im:
         if config.TEST.CROP:
             size = int((256 / 224) * config.DATA.IMG_SIZE)
