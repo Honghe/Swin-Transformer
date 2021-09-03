@@ -81,7 +81,7 @@ def load_checkpoint(config, model, logger):
             config.MODEL.RESUME, map_location='cpu', check_hash=True)
     else:
         checkpoint = torch.load(config.MODEL.RESUME, map_location='cpu')
-    msg = model.load_state_dict(checkpoint['model'], strict=False)
+    msg = model.load_state_dict(checkpoint['model'], strict=True)
     logger.info(msg)
     del checkpoint
     torch.cuda.empty_cache()
