@@ -8,24 +8,29 @@
 import argparse
 import datetime
 import os
+import os.path
+import shutil
 import time
 
 import numpy as np
+import pandas as pd
+import seaborn as sn
 import torch
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
+from matplotlib import pyplot as plt
 from sklearn.metrics import confusion_matrix
 from timm.utils import accuracy, AverageMeter
+from torch import nn
+from torchinfo import summary
+from torchvision import datasets
 
 from config import get_config
-from data.build import build_dataset
+from data.build import build_transform
 from data.samplers import SubsetRandomSampler
 from logger import create_logger
 from models import build_model
 from utils import reduce_tensor
-import seaborn as sn
-import pandas as pd
-from matplotlib import pyplot as plt
 
 try:
     # noinspection PyUnresolvedReferences
@@ -87,6 +92,35 @@ def load_checkpoint(config, model, logger):
     torch.cuda.empty_cache()
 
 
+class ImageFolderWithPaths(datasets.ImageFolder):
+    """Custom dataset that includes image file paths. Extends
+    torchvision.datasets.ImageFolder
+    """
+
+    # override the __getitem__ method. this is the method that dataloader calls
+    def __getitem__(self, index):
+        # this is what ImageFolder normally returns
+        original_tuple = super(ImageFolderWithPaths, self).__getitem__(index)
+        # the image file path
+        path = self.imgs[index][0]
+        # make a new tuple that includes original and the path
+        tuple_with_path = (original_tuple + (path,))
+        return tuple_with_path
+
+
+def build_dataset(is_train, config):
+    transform = build_transform(is_train, config)
+    if config.DATA.DATASET == 'imagenet':
+        prefix = 'val'
+        root = os.path.join(config.DATA.DATA_PATH, prefix)
+        dataset = ImageFolderWithPaths(root, transform=transform)
+        nb_classes = 18
+    else:
+        raise NotImplementedError("We only support ImageNet Now.")
+
+    return dataset, nb_classes
+
+
 def build_loader(config):
     print(f"local rank {config.LOCAL_RANK} / global rank {dist.get_rank()} successfully build train dataset")
     dataset_val, _ = build_dataset(is_train=False, config=config)
@@ -113,13 +147,14 @@ def main(config):
     logger.info(f"Creating model:{config.MODEL.TYPE}/{config.MODEL.NAME}")
     model = build_model(config)
     model.cuda()
-    logger.info(str(model))
+    # logger.info(str(model))
 
     start_time = time.time()
 
     if config.MODEL.RESUME:
         load_checkpoint(config, model, logger)
-        logger.info(str(model))
+        summary(model, input_size=(1, 3, 224, 224))
+        # logger.info(str(model))
         # DDP配置
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK],
                                                           broadcast_buffers=False)
@@ -145,6 +180,21 @@ def main(config):
     logger.info('Training time {}'.format(total_time_str))
 
 
+def copy_classification(preds, labels, img_paths, classes, output_dir):
+    """Copy images of classification to folders.
+    """
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+    os.makedirs(output_dir)
+    for pred, label, img_path in zip(preds, labels, img_paths):
+        label_dir = os.path.join(output_dir, classes[label])
+        pred_dir = os.path.join(label_dir, classes[pred])
+        os.makedirs(label_dir, exist_ok=True)
+        os.makedirs(pred_dir, exist_ok=True)
+        img_name = os.path.basename(img_path)
+        shutil.copy(img_path, os.path.join(pred_dir, img_name))
+
+
 @torch.no_grad()
 def validate(config, data_loader, model, classes):
     criterion = torch.nn.CrossEntropyLoss()
@@ -158,8 +208,8 @@ def validate(config, data_loader, model, classes):
     end = time.time()
     outputs = []
     targets = []
-
-    for idx, (images, target) in enumerate(data_loader):
+    img_paths = []
+    for idx, (images, target, paths) in enumerate(data_loader):
         images = images.cuda(non_blocking=True)
         target = target.cuda(non_blocking=True)
 
@@ -168,6 +218,7 @@ def validate(config, data_loader, model, classes):
 
         outputs.append(output.cpu().numpy().argmax(axis=1))
         targets.append(target.cpu().numpy())
+        img_paths.append(paths)
 
         # measure accuracy and record loss
         loss = criterion(output, target)
@@ -197,6 +248,7 @@ def validate(config, data_loader, model, classes):
     logger.info(f' * Acc@1 {acc1_meter.avg:.3f} Acc@5 {acc5_meter.avg:.3f}')
     targets = [x for target in targets for x in target]
     outputs = [x for output in outputs for x in output]
+    img_paths = [x for img_path in img_paths for x in img_path]
     print(f'targets.len {len(targets)}')
     confmat = confusion_matrix(targets, outputs)
     print(confmat)
@@ -205,6 +257,7 @@ def validate(config, data_loader, model, classes):
     sn.heatmap(df, annot=True, fmt='.3g')
     plt.tight_layout()
     plt.savefig(f'acc1_{acc1_meter.avg:.2f}.jpg')
+    copy_classification(outputs, targets, img_paths, classes, os.path.join(config.DATA.DATA_PATH, 'preds'))
     return acc1_meter.avg, acc5_meter.avg, loss_meter.avg
 
 
