@@ -6,18 +6,21 @@
 # --------------------------------------------------------
 
 import os
+
 import torch
-import numpy as np
 import torch.distributed as dist
-from torchvision import datasets, transforms
-from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+import torchvision.transforms.functional as TF
+from PIL import ImageOps
+from kornia.morphology import erosion
 from timm.data import Mixup
 from timm.data import create_transform
+from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from timm.data.transforms import _pil_interp
+from torchvision import datasets, transforms
 
 from .cached_image_folder import CachedImageFolder
 from .samplers import SubsetRandomSampler
-from PIL import ImageOps
+
 
 def build_loader(config):
     config.defrost()
@@ -87,9 +90,11 @@ def build_dataset(is_train, config):
 
     return dataset, nb_classes
 
+
 import numpy as np
 import random
 from PIL import Image
+
 
 # 自定义添加椒盐噪声的 transform
 class AddPepperNoise(object):
@@ -124,10 +129,10 @@ class AddPepperNoise(object):
             # 选择的值为 (0, 1, 2)，每个取值的概率分别为 [signal_pct, noise_pct/2., noise_pct/2.]
             # 椒噪声和盐噪声分别占 noise_pct 的一半
             # 1 为盐噪声，2 为 椒噪声
-            mask = np.random.choice((0, 1, 2), size=(h, w, 1), p=[signal_pct, noise_pct/2., noise_pct/2.])
+            mask = np.random.choice((0, 1, 2), size=(h, w, 1), p=[signal_pct, noise_pct / 2., noise_pct / 2.])
             mask = np.repeat(mask, c, axis=2)
-            img_[mask == 1] = 255   # 盐噪声
-            img_[mask == 2] = 0     # 椒噪声
+            img_[mask == 1] = 255  # 盐噪声
+            img_[mask == 2] = 0  # 椒噪声
             # 再转换为 image
             return Image.fromarray(img_.astype('uint8')).convert('RGB')
         # 如果随机概率大于 seld.p，则直接返回原图
@@ -137,6 +142,7 @@ class AddPepperNoise(object):
 
 class PadSquare(object):
     """Pad a ``PIL Image`` to sauqre."""
+
     def __call__(self, img):
         """
         Args:
@@ -147,14 +153,26 @@ class PadSquare(object):
         w, h = img.size
         desired_size = w if w > h else h
         old_size = img.size
-        ratio = float(desired_size)/max(old_size)
-        new_size = tuple([int(x*ratio) for x in old_size])
+        ratio = float(desired_size) / max(old_size)
+        new_size = tuple([int(x * ratio) for x in old_size])
         delta_w = desired_size - new_size[0]
         delta_h = desired_size - new_size[1]
-        padding = (delta_w//2, delta_h//2, delta_w-(delta_w//2), delta_h-(delta_h//2))
+        padding = (delta_w // 2, delta_h // 2, delta_w - (delta_w // 2), delta_h - (delta_h // 2))
         img = ImageOps.expand(img, padding, fill=255)
         return img
-    
+
+    def __repr__(self):
+        return self.__class__.__name__ + '()'
+
+
+class Erosion(object):
+    def __call__(self, img: Image) -> Image:
+        if random.random() > 0.5:
+            img = TF.to_tensor(img).unsqueeze(0)
+            img = erosion(img, kernel=torch.ones(3, 3))
+            img = TF.to_pil_image(img.squeeze(0))
+        return img
+
     def __repr__(self):
         return self.__class__.__name__ + '()'
 
@@ -179,6 +197,7 @@ def build_transform(is_train, config):
             transform.transforms[0] = transforms.RandomCrop(config.DATA.IMG_SIZE, padding=4)
         transform.transforms.insert(0, AddPepperNoise(0.9, 0.8))
         transform.transforms.insert(0, transforms.RandomRotation((0, 360), expand=True, fill=255))
+        transform.transforms.insert(0, Erosion())
         return transform
 
     t = []
